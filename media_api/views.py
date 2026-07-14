@@ -27,6 +27,7 @@ from .auth import CurrentUser, auth_token, require_user
 from .job_crypto import encrypt_job_secret
 from .mongo import karaoke_pair_attempt_collection, karaoke_queue_collection, karaoke_remote_collection, media_collection, media_user_state_collection, mongo_client
 from .webhard import fetch_webhard_file, set_media_public, stream_webhard_file, stream_webhard_file_for_viewer, sync_from_webhard, sync_one_from_webhard
+from .worker_status import worker_status_snapshot
 from .youtube import check_download_tools, import_youtube_item, preview_youtube, video_frame_time_tags, youtube_time_tags
 
 try:
@@ -116,6 +117,23 @@ def me(request: HttpRequest) -> JsonResponse:
             "delete": user.has_permission("DELETE"),
         },
     })
+
+
+@csrf_exempt
+def worker_pods(request: HttpRequest) -> JsonResponse | HttpResponse:
+    if request.method == "OPTIONS":
+        return HttpResponse(status=204)
+    if request.method not in {"GET", "POST"}:
+        return bad_request("GET or POST is required")
+    internal_token = str(settings.MEDIA_CONFIG.get("MEDIA_INTERNAL_API_TOKEN") or "").strip()
+    requested_token = request.headers.get("X-Internal-Api-Token", "").strip()
+    if not internal_token or requested_token != internal_token:
+        user = require_user(request)
+        if not isinstance(user, CurrentUser):
+            return user
+        if not user.is_admin:
+            return JsonResponse({"ok": False, "code": "FORBIDDEN", "message": "admin permission is required"}, status=403)
+    return ok(worker_status_snapshot())
 
 
 def sync(request: HttpRequest) -> JsonResponse:

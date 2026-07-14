@@ -9,6 +9,7 @@ urlpatterns = [
     path("me/", views.me),
     path("sync/", lambda request: views.options_or_view(request, views.sync)),
     path("youtube/tools/check/", views.youtube_tools_check),
+    path("worker/pods/", views.worker_pods),
     path("youtube/time-tags/generate/", views.youtube_time_tags_view),
     path("youtube/time-tags/status/", views.youtube_time_tags_status),
     path("youtube/preview/", views.youtube_preview),
