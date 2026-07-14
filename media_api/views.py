@@ -24,6 +24,7 @@ import qrcode
 import qrcode.image.svg
 
 from .auth import CurrentUser, auth_token, require_user
+from .job_crypto import encrypt_job_secret
 from .mongo import karaoke_pair_attempt_collection, karaoke_queue_collection, karaoke_remote_collection, media_collection, media_user_state_collection, mongo_client
 from .webhard import fetch_webhard_file, set_media_public, stream_webhard_file, stream_webhard_file_for_viewer, sync_from_webhard, sync_one_from_webhard
 from .youtube import check_download_tools, import_youtube_item, preview_youtube, video_frame_time_tags, youtube_time_tags
@@ -32,6 +33,7 @@ try:
     YOUTUBE_IMPORT_CONCURRENCY = max(int(os.getenv("YOUTUBE_IMPORT_CONCURRENCY", "1")), 1)
 except ValueError:
     YOUTUBE_IMPORT_CONCURRENCY = 1
+RUN_INLINE_JOBS = os.getenv("MEDIA_RUN_INLINE_JOBS", "false").lower() == "true"
 YOUTUBE_IMPORT_SEMAPHORE = threading.Semaphore(YOUTUBE_IMPORT_CONCURRENCY)
 LOGGER = logging.getLogger(__name__)
 SENSITIVE_PATH_RE = re.compile(r"(/karaoke/(?:tv/session|remote)/)[^/]+")
@@ -1577,6 +1579,9 @@ def create_time_tag_job(user: CurrentUser, limit: int) -> dict[str, Any]:
     job = {
         "job_id": uuid.uuid4().hex,
         "owner_user_id": user.user_id,
+        "owner_roles": user.roles,
+        "owner_service_permissions": user.service_permissions,
+        "owner_access_token": encrypt_job_secret(user.access_token),
         "status": "QUEUED",
         "message": "time tag job created",
         "item_count": len(items),
@@ -1656,6 +1661,8 @@ def start_time_tag_job(job: dict[str, Any], user: CurrentUser) -> None:
         return
     if not any(item.get("status") in {"QUEUED", "FAILED"} for item in job.get("items") or []):
         refresh_time_tag_job_status(str(job.get("job_id") or ""))
+        return
+    if not RUN_INLINE_JOBS:
         return
     now = datetime.utcnow()
     updated = time_tag_job_collection().update_one(
@@ -1740,7 +1747,7 @@ def mark_time_tag_item(job_id: str, file_id: int, status: str, message: str, tag
         update["items.$.tags"] = tags
     time_tag_job_collection().update_one(
         {"job_id": job_id, "items.file_id": file_id},
-        {"$set": update},
+        {"$set": update, "$unset": {"items.$.worker_id": "", "items.$.lease_expires_at": ""}},
     )
     refresh_time_tag_job_status(job_id)
 
@@ -1777,6 +1784,7 @@ def refresh_time_tag_job_status(job_id: str) -> None:
                 "skipped_empty_count": result["skipped_empty_count"],
                 "skipped_missing_url_count": result["skipped_missing_url_count"],
                 "skipped_missing_file_count": result["skipped_missing_file_count"],
+                "worker_running": running > 0,
                 "updated_at": datetime.utcnow(),
             }
         },
@@ -1893,6 +1901,9 @@ def create_youtube_import_job(url: str, user: CurrentUser, tags: list[str]) -> d
     doc = {
         "job_id": job_id,
         "owner_user_id": user.user_id,
+        "owner_roles": user.roles,
+        "owner_service_permissions": user.service_permissions,
+        "owner_access_token": encrypt_job_secret(user.access_token),
         "status": "QUEUED" if queued_count else "DONE",
         "message": "youtube import job created" if queued_count else "youtube import completed",
         "url": url,
@@ -1936,6 +1947,9 @@ def start_youtube_import_item(job: dict[str, Any], video_id: str, user: CurrentU
         return job
     if youtube_running_count(job) >= YOUTUBE_IMPORT_CONCURRENCY:
         raise RuntimeError("youtube import concurrency limit exceeded")
+    if not RUN_INLINE_JOBS:
+        refresh_youtube_job_status(job["job_id"])
+        return youtube_job_collection().find_one({"job_id": job["job_id"]}) or job
     mark_youtube_import_item_running(job["job_id"], video_id)
     thread = threading.Thread(target=run_youtube_import_item, args=(job["job_id"], video_id, user), daemon=True)
     thread.start()
@@ -1959,6 +1973,8 @@ def start_youtube_import_job(job: dict[str, Any], user: CurrentUser) -> int:
     )
     if updated.modified_count == 0:
         return 0
+    if not RUN_INLINE_JOBS:
+        return len(pending)
     thread = threading.Thread(target=run_youtube_import_job, args=(job["job_id"], pending, user), daemon=True)
     thread.start()
     return len(pending)
@@ -2054,7 +2070,7 @@ def update_youtube_import_item(
         update["items.$.result"] = result
     youtube_job_collection().update_one(
         {"job_id": job_id, "items.youtube_video_id": video_id},
-        {"$set": update},
+        {"$set": update, "$unset": {"items.$.worker_id": "", "items.$.lease_expires_at": ""}},
     )
     refresh_youtube_job_status(job_id)
 
@@ -2091,6 +2107,7 @@ def refresh_youtube_job_status(job_id: str) -> None:
                 "failed_count": failed,
                 "skipped_duplicate_count": duplicate,
                 "started_count": saved + failed + duplicate + running,
+                "dispatcher_running": running > 0,
                 "updated_at": datetime.utcnow(),
             }
         },
