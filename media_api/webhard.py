@@ -137,6 +137,22 @@ def stream_webhard_file(current_user: CurrentUser, file_id: int, file_kind: str,
     )
 
 
+def stream_webhard_hls(current_user: CurrentUser, file_id: int, hls_path: str, allow_public: bool = False) -> requests.Response:
+    payload: dict[str, Any] = {
+        "file_id": file_id,
+        "hls_path": hls_path,
+        "viewer_user_id": current_user.user_id,
+        "viewer_is_admin": current_user.is_admin,
+        "allow_public": allow_public,
+    }
+    return internal_stream_post(
+        current_user,
+        "/internal/media/hls-stream.json",
+        payload,
+        timeout=30,
+    )
+
+
 def stream_webhard_file_for_viewer(
     viewer_user_id: str,
     viewer_is_admin: bool,
@@ -287,6 +303,7 @@ def media_document(row: dict[str, Any], synced_at: datetime, owner_is_admin: boo
         "content_kind": content_kind,
         "thumbnail_url": thumbnail_url,
         "content_url": f"/api/media/{file_id}/content-file/",
+        "hls_url": f"/api/media/{file_id}/hls/master.m3u8" if content_kind == "VIDEO" else "",
         "download_url": f"/api/media/{file_id}/download-file/",
         "storage_path": row.get("storage_path") or "",
         "original_created_at": row.get("original_created_at"),

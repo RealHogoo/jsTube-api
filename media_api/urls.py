@@ -37,6 +37,7 @@ urlpatterns = [
     path("karaoke/tv/pair/", views.mongo_safe_view(views.karaoke_tv_pair)),
     path("karaoke/tv/join/", views.mongo_safe_view(views.karaoke_tv_join)),
     path("media/<int:webhard_file_id>/content-file/", lambda request, webhard_file_id: views.media_file_proxy(request, webhard_file_id, "content")),
+    path("media/<int:webhard_file_id>/hls/<path:hls_path>", views.media_hls_proxy),
     path("media/<int:webhard_file_id>/thumbnail-file/", lambda request, webhard_file_id: views.media_file_proxy(request, webhard_file_id, "thumbnail")),
     path("media/<int:webhard_file_id>/download-file/", lambda request, webhard_file_id: views.media_file_proxy(request, webhard_file_id, "download")),
     path("albums/", views.mongo_safe_view(views.albums)),

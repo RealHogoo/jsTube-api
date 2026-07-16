@@ -26,7 +26,7 @@ import qrcode.image.svg
 from .auth import CurrentUser, auth_token, require_user
 from .job_crypto import encrypt_job_secret
 from .mongo import karaoke_pair_attempt_collection, karaoke_queue_collection, karaoke_remote_collection, media_collection, media_user_state_collection, mongo_client
-from .webhard import fetch_webhard_file, set_media_public, stream_webhard_file, stream_webhard_file_for_viewer, sync_from_webhard, sync_one_from_webhard
+from .webhard import fetch_webhard_file, set_media_public, stream_webhard_file, stream_webhard_file_for_viewer, stream_webhard_hls, sync_from_webhard, sync_one_from_webhard
 from .worker_status import worker_status_snapshot
 from .youtube import check_download_tools, import_youtube_item, preview_youtube, video_frame_time_tags, youtube_time_tags
 
@@ -1198,6 +1198,42 @@ def media_file_proxy(request: HttpRequest, webhard_file_id: int, file_kind: str)
     return response
 
 
+def media_hls_proxy(request: HttpRequest, webhard_file_id: int, hls_path: str) -> JsonResponse | HttpResponse:
+    user = require_user(request, require_media_permission=False)
+    if not isinstance(user, CurrentUser):
+        return user
+    if request.method != "GET":
+        return bad_request("GET is required")
+
+    item = media_collection().find_one(readable_media_query(user, webhard_file_id))
+    if not item:
+        return JsonResponse({"ok": False, "code": "NOT_FOUND", "message": "media file not found"}, status=404)
+    if not user.has_any_media_permission() and not is_public_karaoke_media(item):
+        return JsonResponse({"ok": False, "code": "FORBIDDEN", "message": "media permission is required"}, status=403)
+    if not safe_hls_path(hls_path):
+        return bad_request("invalid HLS path")
+    try:
+        upstream = stream_webhard_hls(user, webhard_file_id, hls_path, allow_public=is_public_media(item))
+    except RuntimeError as exc:
+        LOGGER.info("webhard HLS stream failed for file_id=%s path=%s: %s", webhard_file_id, hls_path, exc)
+        return JsonResponse({"ok": False, "code": "WEBHARD_HLS_STREAM_FAILED", "message": "HLS stream is not ready"}, status=404)
+
+    response = StreamingHttpResponse(
+        stream_response_chunks(upstream),
+        status=upstream.status_code,
+        content_type=upstream.headers.get("Content-Type") or "application/octet-stream",
+    )
+    for header in [
+        "X-Content-Type-Options",
+        "Content-Length",
+        "Cache-Control",
+    ]:
+        value = upstream.headers.get(header)
+        if value:
+            response[header] = value
+    return response
+
+
 def albums(request: HttpRequest) -> JsonResponse:
     user = require_user(request)
     if not isinstance(user, CurrentUser):
@@ -1229,6 +1265,8 @@ def serialize_media(item: dict[str, Any] | None, user_state: dict[str, Any] | No
     content_url = str(result.get("content_url") or "")
     if result.get("content_kind") == "VIDEO" and (thumbnail_url == content_url or "/file/content/" in thumbnail_url):
         result["thumbnail_url"] = ""
+    if result.get("content_kind") == "VIDEO" and result.get("webhard_file_id"):
+        result["hls_url"] = result.get("hls_url") or f"/api/media/{int(result['webhard_file_id'])}/hls/master.m3u8"
     result.pop("storage_path", None)
     for key, value in list(result.items()):
         if isinstance(value, ObjectId):
@@ -1251,6 +1289,7 @@ def media_list_projection() -> dict[str, int]:
         "content_kind": 1,
         "thumbnail_url": 1,
         "content_url": 1,
+        "hls_url": 1,
         "download_url": 1,
         "storage_path": 1,
         "original_created_at": 1,
@@ -1422,6 +1461,18 @@ def normalized_range_header(value: str) -> str | None:
     if not match or (not match.group(1) and not match.group(2)):
         return None
     return text
+
+
+def safe_hls_path(value: str) -> bool:
+    text = str(value or "").strip().lstrip("/")
+    if not text or "\\" in text:
+        return False
+    parts = text.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return False
+    if text == "master.m3u8":
+        return True
+    return re.fullmatch(r"(720|1080)/(index\.m3u8|[A-Za-z0-9._-]+\.ts)", text) is not None
 
 
 def playback_quality(request: HttpRequest, default: str = "") -> str:
