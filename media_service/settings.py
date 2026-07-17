@@ -93,7 +93,7 @@ MEDIA_CONFIG = {
     "YOUTUBE_VIDEO_PRESET": os.environ.get("YOUTUBE_VIDEO_PRESET", "veryfast"),
     "YOUTUBE_FFMPEG_THREADS": int(os.environ.get("YOUTUBE_FFMPEG_THREADS", "0")),
     "YOUTUBE_AUDIO_BITRATE": os.environ.get("YOUTUBE_AUDIO_BITRATE", "160k"),
-    "MEDIA_WORKER_EXPECTED_REPLICAS": int(os.environ.get("MEDIA_WORKER_EXPECTED_REPLICAS", os.environ.get("JSTUBE_WORKER_REPLICAS", "3"))),
+    "MEDIA_WORKER_EXPECTED_REPLICAS": int(os.environ.get("MEDIA_WORKER_EXPECTED_REPLICAS", os.environ.get("JSTUBE_WORKER_REPLICAS", "1"))),
 }
 
 CORS_ORIGINS = [item.strip() for item in os.environ.get("MEDIA_SERVICE_CORS_ORIGINS", "").split(",") if item.strip()]
